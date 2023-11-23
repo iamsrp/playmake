@@ -17,11 +17,13 @@ For example:
 playmake.py -G -p /u/srp/music/mp3/Pop/Pop.m3u -s 'The_The/45_RPM_-_The_Singles_Of_The_The/13-December_Sunlight_(Cried_Out).mp3'
 ```
 
-It's not fast (even if you have a decent GPU) and it's also far from perfect. But it kinda works.
+It's not fast (even if you have a decent GPU), it is memory hungry, and it's
+also far from perfect. But it kinda works.
 
 ## Dependencies
 
 PlayMake requires:
+  - [argh](https://pypi.org/project/argh/) for argument parsing.
+  - [mutagen](https://pypi.org/project/mutagen/) for reading song metadata.
   - [openl3](https://github.com/marl/openl3) to generate the embeddings in the
     song space.
-  - [argh](https://pypi.org/project/argh/) for argument parsing.

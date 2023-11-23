@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-'''
+"""
 Make playlists from similar audio files.
-'''
+"""
 
 import argh
 import json
 import logging
 import math
+import mutagen
 import numpy as np
 import os
 import random
@@ -27,9 +28,9 @@ LOG.basicConfig(
 _STATE_LOCK = Lock()
 
 def save_data(data, fn):
-    '''
+    """
     Save out the state.
-    '''
+    """
     # Save them all out
     LOG.info(f"Saving {fn}")
     with open(fn, 'w') as fh:
@@ -38,11 +39,11 @@ def save_data(data, fn):
 
 
 def compute_embeddings(pending, root, data, data_fn, save_period):
-    '''
+    """
     Work through the list of pending files and compute their
     embeddings. Each time we do this we save them out since they are expensive
     to compute.
-    '''
+    """
     import openl3
     import soundfile as sf
 
@@ -79,10 +80,17 @@ def compute_embeddings(pending, root, data, data_fn, save_period):
         save_data(data, data_fn)
 
 
-def generate_playlist(count, start, files, data, data_fn):
-    '''
+def generate_playlist(count,
+                      start,
+                      files,
+                      data,
+                      data_fn,
+                      dirname,
+                      artist_lookback,
+                      album_lookback):
+    """
     Generate the list of songs, starting at the given one.
-    '''
+    """
     LOG.info("Starting a playlist with %s", start)
 
     # True if we need to save out the mutated data
@@ -91,6 +99,10 @@ def generate_playlist(count, start, files, data, data_fn):
     # Local handles
     distances  = data['distances' ]
     embeddings = data['embeddings']
+
+    # Lookbacks
+    artists = [None] * artist_lookback
+    albums  = [None] * album_lookback
 
     # What we give back, starting with the first one
     result = []
@@ -143,13 +155,61 @@ def generate_playlist(count, start, files, data, data_fn):
         dists = sorted(dists, key=lambda pair:pair[1])
         limit = 10
         prev = song
+        info = None
         LOG.debug("Closest to %s:  %s", song, dists[:3])
         LOG.debug("Furthest to %s: %s", song, dists[-3:])
-        while song in seen and limit < len(dists):
+        while song is None or (song in seen and limit < len(dists)):
+            # Choose a song and increase the lookback
             song = random.choice(dists[:limit])[0]
             limit += 1
+
+            # Avoid stale data
+            info = None
+
+            # See if we need to avoid recent artists or albums
+            if len(artists) > 0 or len(albums) > 0:
+                LOG.debug("Checking for %s details in artists %s and albums %s",
+                          song, artists, albums)
+                path = os.path.join(dirname, song)
+                try:
+                    # Get the song info. If it's one which has an artist or
+                    # album in the lookbacks then ignore it and go around again.
+                    info = get_song_info(path)
+                    if len(artists) > 0:
+                        artist = info.get('artist', None)
+                        LOG.debug("%s artist is '%s'", song, artist)
+                        if artist is not None and artist in artists:
+                            LOG.debug("Skipping %s since artist in lookbacks",
+                                      song)
+                            song = None
+                            continue
+                    if len(albums) > 0:
+                        album = info.get('album', None)
+                        LOG.debug("%s album is '%s'", song, album)
+                        if album is not None and album in albums:
+                            LOG.debug("Skipping %s since album in lookbacks",
+                                      song)
+                            song = None
+                            continue
+
+                except Exception as e:
+                    LOG.debug("Failed to get info for %s: %s", path, e)
+
+        # We accepted the song
         result.append(song)
 
+        # If we have song info then save it
+        if info is not None:
+            artist = info.get('artist', None)
+            album  = info.get('album', None)
+            if len(artists) > 0 and artist:
+                artists.pop(0)
+                artists.append(artist)
+            if len(albums) > 0 and album:
+                albums.pop(0)
+                albums.append(album)
+
+        # Say what we did
         LOG.info("Added %s with distance %0.5f",
                  song, distances[keyfmt % (prev, song)])
 
@@ -160,14 +220,47 @@ def generate_playlist(count, start, files, data, data_fn):
     # And give it all back
     return result
 
+
+def get_song_info(path):
+    """
+    Get a dict of song information.
+    """
+    result = dict()
+
+    info = mutagen.File(path)
+    if isinstance(info, mutagen.mp3.MP3):
+        for (key, value) in info.items():
+            if   key == 'TALB':
+                result['album'] = value.text[0]
+            elif key == 'TIT2':
+                result['name'] = value.text[0]
+            elif key == 'TPE1':
+                result['artist'] = value.text[0]
+    elif isinstance(info, mutagen.flac.FLAC):
+        for (key, value) in info.items():
+            if   key == 'album':
+                result['album'] = value[0]
+            elif key == 'title':
+                reslt['name'] = value[0]
+            elif key == 'artist':
+                result['artist'] = value[0]
+    LOG.debug("Song info for %s was %s yielding %s", path, info, result)
+    return result
+
 # ------------------------------------------------------------------------------
 
+@argh.arg('--artist_lookback', '-A',
+          help="How many recent songs must have a different artist")
+@argh.arg('--album_lookback', '-B',
+          help="How many recent songs must have a different album")
 @argh.arg('--count', '-c',
           help="How many entries to generate in the playlist")
 @argh.arg('--distance', '-d',
           help="How many songs to look at away from the current one")
 @argh.arg('--generate_only', '-G',
           help="Don't compute distances, just generate")
+@argh.arg('--log_level', '-L',
+          help="The logging level to use")
 @argh.arg('--num_compute_threads', '-t',
           help="How many threads to use to compute the embeddings")
 @argh.arg('--playlist', '-p',
@@ -177,15 +270,20 @@ def generate_playlist(count, start, files, data, data_fn):
 @argh.arg('--start', '-s',
           help="The entry (text) from the playlist file to start at")
 def main(playlist=None,
+         artist_lookback=2,
+         album_lookback=2,
          count=100,
          distance=25,
          generate_only=False,
+         log_level='INFO',
          num_compute_threads=10,
          save_period=10,
          start=None):
-    '''
+    """
     Main entry point.
-    '''
+    """
+    logging.getLogger().setLevel(log_level)
+
     # We need a playlist
     if not playlist:
         raise ValueError("No playlist given")
@@ -237,7 +335,14 @@ def main(playlist=None,
             t.join()
 
     # Now generate the playlist
-    playlist = generate_playlist(count, start, files, data, data_fn)
+    playlist = generate_playlist(count,
+                                 start,
+                                 files,
+                                 data,
+                                 data_fn,
+                                 dirname,
+                                 artist_lookback,
+                                 album_lookback)
 
     # And print it!
     for entry in playlist:

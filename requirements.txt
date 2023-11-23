@@ -1,0 +1,4 @@
+mutagen
+numpy
+openl3
+soundfile
