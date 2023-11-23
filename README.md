@@ -14,7 +14,7 @@ so.
 For example:
 
 ```bash
-playmake.py -G -p /u/srp/music/mp3/Pop/Pop.m3u -s 'The_The/45_RPM_-_The_Singles_Of_The_The/13-December_Sunlight_(Cried_Out).mp3'
+playmake.py -G -p $HOME/Music/mp3/Pop/Pop.m3u -s 'The_The/45_RPM_-_The_Singles_Of_The_The/13-December_Sunlight_(Cried_Out).mp3'
 ```
 
 It's not fast (even if you have a decent GPU), it is memory hungry, and it's
