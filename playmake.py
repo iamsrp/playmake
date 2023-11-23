@@ -31,11 +31,21 @@ def save_data(data, fn):
     """
     Save out the state.
     """
-    # Save them all out
-    LOG.info(f"Saving {fn}")
-    with open(fn, 'w') as fh:
+    # Save them all out, first as a partial file so we don't clobber any
+    # existing one with bad data
+    part = fn + '.partial'
+    LOG.info(f"Saving data as {part}")
+    with open(part, 'w') as fh:
         with _STATE_LOCK:
             json.dump(data, fh)
+
+    # Safe to rename it
+    LOG.info(f"Renaming {part} to {fn}")
+    try:
+        os.unlink(fn)
+    except Exception:
+        pass
+    os.rename(part, fn)
 
 
 def compute_embeddings(pending, root, data, data_fn, save_period):
